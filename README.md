@@ -4,9 +4,13 @@ Algorithm for OpenAPS implementations. To get started with OpenAPS, see the [Ope
 
 ## Installing oref0
 
-Install tools globally:
+Install tools ~globally~ locally:
 
-`npm run global-install`
+`npm run local-install`
+
+## Run the stub
+
+First run `node server.js`, then `python timer_server.py`
 
 ## Usage of oref0
 
