@@ -10,7 +10,7 @@ Install tools ~globally~ locally:
 
 ## Run the stub
 
-First run `node server.js`, then `python timer_server.py`
+First run `node server.js`, then go and do your stuff in the simglucose repo.
 
 ## Usage of oref0
 
