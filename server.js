@@ -23,7 +23,8 @@ class PatientDataManager {
     static createPatient(patientId, profile, initialData = {}, settings = {}) {
         const defaultSettings = {
             timezone: 'UTC',
-            historyRetentionHours: 24,
+            historyRetentionPeriod: 'weeks', // 'hours', 'days', 'weeks', 'months'
+            historyRetentionValue: 1,       // default to 1 week
             autoCleanup: true
         };
 
@@ -115,20 +116,79 @@ class PatientDataManager {
         const patient = patients[patientId];
         if (!patient) return;
 
-        const cutoffTime = Date.now() - (patient.settings.historyRetentionHours * 60 * 60 * 1000);
+        // Find the newest timestamp from all data sources
+        let newestTime = 0;
+        
+        // Check glucose history
+        if (patient.history.glucose.length > 0) {
+            const newestGlucose = Math.max(...patient.history.glucose.map(g => g.date));
+            newestTime = Math.max(newestTime, newestGlucose);
+        }
+        
+        // Check pump history
+        if (patient.history.pump.length > 0) {
+            const newestPump = Math.max(...patient.history.pump.map(p => new Date(p.timestamp).getTime()));
+            newestTime = Math.max(newestTime, newestPump);
+        }
+        
+        // Check carb history
+        if (patient.history.carbs.length > 0) {
+            const newestCarb = Math.max(...patient.history.carbs.map(c => new Date(c.timestamp).getTime()));
+            newestTime = Math.max(newestTime, newestCarb);
+        }
+        
+        // If no data exists, skip cleanup
+        if (newestTime === 0) return;
+
+        // Calculate cutoff time based on retention settings and newest data
+        let cutoffTime;
+        const retentionValue = patient.settings.historyRetentionValue || 1;
+        const retentionPeriod = patient.settings.historyRetentionPeriod || 'weeks';
+
+        switch (retentionPeriod) {
+            case 'hours':
+                cutoffTime = newestTime - (retentionValue * 60 * 60 * 1000);
+                break;
+            case 'days':
+                cutoffTime = newestTime - (retentionValue * 24 * 60 * 60 * 1000);
+                break;
+            case 'weeks':
+                cutoffTime = newestTime - (retentionValue * 7 * 24 * 60 * 60 * 1000);
+                break;
+            case 'months':
+                cutoffTime = newestTime - (retentionValue * 30 * 24 * 60 * 60 * 1000);
+                break;
+            default:
+                // Fallback to hours if invalid period
+                cutoffTime = newestTime - (retentionValue * 60 * 60 * 1000);
+        }
 
         // Clean glucose history
+        const beforeGlucose = patient.history.glucose.length;
         patient.history.glucose = patient.history.glucose.filter(g => g.date >= cutoffTime);
 
         // Clean pump history
+        const beforePump = patient.history.pump.length;
         patient.history.pump = patient.history.pump.filter(p =>
             new Date(p.timestamp).getTime() >= cutoffTime
         );
 
         // Clean carb history
+        const beforeCarbs = patient.history.carbs.length;
         patient.history.carbs = patient.history.carbs.filter(c =>
             new Date(c.timestamp).getTime() >= cutoffTime
         );
+
+
+        if (beforeGlucose == patient.history.glucose.length&&
+            beforePump == patient.history.pump.length &&
+            beforeCarbs == patient.history.carbs.length) {
+            return;
+        }
+        console.log(`Cleaned up data older than ${retentionValue} ${retentionPeriod} from newest data point for patient ${patientId}.` +
+                    ` Removed: ${beforeGlucose - patient.history.glucose.length} glucose,` +
+                    ` ${beforePump - patient.history.pump.length} pump,` +
+                    ` ${beforeCarbs - patient.history.carbs.length} carb entries`);
     }
 
     static validateProfile(profile) {
