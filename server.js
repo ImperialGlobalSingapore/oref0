@@ -1,5 +1,7 @@
 const express = require('express');
 const app = express();
+const fs = require('fs');
+const path = require('path');
 
 // Library imports - same as the CLI tools use
 const generateIOB = require('./lib/iob');
@@ -8,11 +10,106 @@ const determine_basal = require('./lib/determine-basal/determine-basal');
 const generateMeal = require('./lib/meal');
 const tempBasalFunctions = require('./lib/basal-set-temp');
 
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+}
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
 // In-memory patient data store
 const patients = {};
+
+// Track log files that have been initialized in this session
+const logFileMap = new Map();
+
+// Utility function to capture stderr output
+function captureStderr(callback) {
+    const originalWrite = process.stderr.write;
+    let stderrOutput = '';
+    
+    // Override stderr.write
+    process.stderr.write = function(chunk, encoding, fd) {
+        if (typeof chunk === 'string') {
+            stderrOutput += chunk;
+        }
+        // Still write to actual stderr (optional - comment out if you don't want console output)
+        return originalWrite.apply(process.stderr, arguments);
+    };
+    
+    try {
+        const result = callback();
+        // Restore original stderr
+        process.stderr.write = originalWrite;
+        return { result, stderr: stderrOutput };
+    } catch (error) {
+        // Restore original stderr even if error occurs
+        process.stderr.write = originalWrite;
+        throw error;
+    }
+}
+
+// Function to save calculation logs to file
+function saveCalculationLog(patientId, data = {}) {
+    const timestamp = new Date().toISOString();
+    let logFileName;
+    let logFilePath;
+    
+    // Check if we've already determined the log file for this patient in this session
+    if (logFileMap.has(patientId)) {
+        // Use the already determined log file
+        logFileName = logFileMap.get(patientId);
+        logFilePath = path.join(logsDir, logFileName);
+    } else {
+        // First time logging for this patient in this session
+        logFileName = `${patientId}_calculations.log`;
+        logFilePath = path.join(logsDir, logFileName);
+        
+        // Check if file exists and add timestamp to filename if it does
+        if (fs.existsSync(logFilePath)) {
+            // Create timestamp for filename (replace colons with hyphens for Windows compatibility)
+            const fileTimestamp = timestamp.replace(/:/g, '-').replace(/\./g, '-');
+            logFileName = `${patientId}_calculations_${fileTimestamp}.log`;
+            logFilePath = path.join(logsDir, logFileName);
+        }
+        
+        // Store the determined filename for future use
+        logFileMap.set(patientId, logFileName);
+    }
+    
+    const logEntry = {
+        timestamp: timestamp,
+        patientId: patientId,
+        request: {
+            currentTime: data.currentTime,
+            newData: data.newData,
+            options: data.options
+        },
+        response: {
+            suggestion: data.suggestion,
+            iob: data.iob,
+            meal: data.meal,
+            glucose: data.glucose
+        },
+        diagnostics: {
+            stderr: data.stderrLog
+        }
+    };
+    
+    // Format log entry with separator
+    const logContent = '='.repeat(80) + '\n' +
+                      `[${timestamp}] Patient: ${patientId}\n` +
+                      '-'.repeat(80) + '\n' +
+                      JSON.stringify(logEntry, null, 2) + '\n' +
+                      '='.repeat(80) + '\n\n';
+    
+    // Append to the log file (creates file if it doesn't exist)
+    fs.appendFileSync(logFilePath, logContent);
+    
+    return logFileName;
+}
 
 // Utility functions for data management
 class PatientDataManager {
@@ -317,33 +414,41 @@ function calculateBasalForPatient(patientId, currentTime, options = {}) {
     // Get current temp basal
     const currentTemp = patient.currentState.tempBasal || { rate: effectiveProfile.current_basal, duration: 0 };
 
-    // Calculate basal recommendation
-    const suggestion = determine_basal(
-        glucoseStatus,
-        currentTemp,
-        iobData,
-        effectiveProfile,
-        options.autosens,
-        mealData,
-        tempBasalFunctions,
-        options.microbolus || false,
-        null, // reservoir_data
-        new Date(currentTime).getTime()
-    );
+    // Calculate basal recommendation with stderr capture
+    const captureResult = captureStderr(() => {
+        return determine_basal(
+            glucoseStatus,
+            currentTemp,
+            iobData,
+            effectiveProfile,
+            options.autosens,
+            mealData,
+            tempBasalFunctions,
+            options.microbolus || false,
+            null, // reservoir_data
+            new Date(currentTime).getTime()
+        );
+    });
+
+    const suggestion = captureResult.result;
+    const stderrOutput = captureResult.stderr;
 
     // Cache results
     patient.currentState.cachedIOB = iobData;
     patient.currentState.cachedMeal = mealData;
     patient.currentState.lastCalculation = {
         timestamp: currentTime,
-        suggestion: suggestion
+        suggestion: suggestion,
+        stderrLog: stderrOutput  // Include stderr in cached calculation
     };
 
     return {
         suggestion: suggestion,
         iob: iobData[0], // Return first IOB entry for immediate use
         meal: mealData,
-        glucoseStatus: glucoseStatus
+        glucoseStatus: glucoseStatus,
+        autosens: autosensData, // Include autosens data
+        stderrLog: stderrOutput  // Include in return value
     };
 }
 
@@ -393,11 +498,24 @@ app.post('/patients/:patientId/calculate', (req, res) => {
     if (Object.keys(newData).length > 0) {
         PatientDataManager.addNewData(patientId, newData);
     }
-    // console.log('new data')
     // console.log(newData)
-    console.log(patients[patientId].history.glucose)
+    // console.log(patients[patientId].history.glucose)
     // Calculate basal recommendation
     const result = calculateBasalForPatient(patientId, currentTime, options);
+
+    // Save calculation to log file
+    if (options.enableLogging !== false) {  // Default to true
+        saveCalculationLog(patientId, {
+            currentTime: currentTime,
+            newData: newData,
+            options: options,
+            suggestion: result.suggestion,
+            iob: result.iob,
+            meal: result.meal,
+            glucose: result.glucoseStatus,
+            stderrLog: result.stderrLog
+        });
+    }
 
     res.json({
         patientId: patientId,
