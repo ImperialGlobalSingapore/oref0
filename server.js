@@ -289,7 +289,7 @@ class PatientDataManager {
     }
 
     static validateProfile(profile) {
-        const required = ['carb_ratio', 'sens', 'dia', 'max_bg', 'min_bg', 'current_basal'];
+        const required = ['carb_ratio', 'sens', 'isfProfile', 'max_bg', 'min_bg', 'current_basal'];
         const missing = required.filter(field => !(field in profile));
 
         if (missing.length > 0) {
@@ -302,6 +302,21 @@ class PatientDataManager {
 
         if (profile.sens <= 0) {
             throw new Error(`sens ${profile.sens} must be positive`);
+        }
+
+        // Validate isfProfile structure
+        if (typeof profile.isfProfile !== 'object' || profile.isfProfile === null) {
+            throw new Error('isfProfile must be an object');
+        }
+
+        if (!Array.isArray(profile.isfProfile.sensitivities) || profile.isfProfile.sensitivities.length === 0) {
+            throw new Error('isfProfile.sensitivities must be a non-empty array');
+        }
+
+        for (const s of profile.isfProfile.sensitivities) {
+            if (typeof s.sensitivity === 'undefined' || s.sensitivity <= 0) {
+                throw new Error(`Each sensitivity entry in isfProfile must have a positive 'sensitivity' value.`);
+            }
         }
 
         return true;
