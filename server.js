@@ -241,7 +241,7 @@ class PatientDataManager {
         }
         
         // If no data exists, skip cleanup
-        if (newestTime === 0) return;
+        if (newestTime === 0 || isNaN(newestTime)) return;
 
         // Calculate cutoff time based on retention settings and newest data
         let cutoffTime;
