@@ -214,6 +214,11 @@ class PatientDataManager {
         const patient = patients[patientId];
         if (!patient) return;
 
+        // if no history retention settings, skip cleanup
+        if (patient.history.glucose.length === 0 &&
+            patient.history.pump.length === 0 &&
+            patient.history.carbs.length === 0) return;
+
         // Find the newest timestamp from all data sources
         let newestTime = 0;
         
