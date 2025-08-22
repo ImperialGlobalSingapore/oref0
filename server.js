@@ -294,39 +294,6 @@ class PatientDataManager {
                     ` ${beforeCarbs - patient.history.carbs.length} carb entries`);
     }
 
-    static validateProfile(profile) {
-        const required = ['carb_ratio', 'sens', 'isfProfile', 'max_bg', 'min_bg', 'current_basal'];
-        const missing = required.filter(field => !(field in profile));
-
-        if (missing.length > 0) {
-            throw new Error(`Missing required profile fields: ${missing.join(', ')}`);
-        }
-
-        if (profile.carb_ratio < 3) {
-            throw new Error(`carb_ratio ${profile.carb_ratio} out of bounds (minimum 3)`);
-        }
-
-        if (profile.sens <= 0) {
-            throw new Error(`sens ${profile.sens} must be positive`);
-        }
-
-        // Validate isfProfile structure
-        if (typeof profile.isfProfile !== 'object' || profile.isfProfile === null) {
-            throw new Error('isfProfile must be an object');
-        }
-
-        if (!Array.isArray(profile.isfProfile.sensitivities) || profile.isfProfile.sensitivities.length === 0) {
-            throw new Error('isfProfile.sensitivities must be a non-empty array');
-        }
-
-        for (const s of profile.isfProfile.sensitivities) {
-            if (typeof s.sensitivity === 'undefined' || s.sensitivity <= 0) {
-                throw new Error(`Each sensitivity entry in isfProfile must have a positive 'sensitivity' value.`);
-            }
-        }
-
-        return true;
-    }
 
     static getPatientStatus(patientId) {
         const patient = patients[patientId];
@@ -388,8 +355,6 @@ function calculateMealForPatient(patientId, clock) {
     const patient = patients[patientId];
     if (!patient) throw new Error('Patient not found');
 
-    // Validate profile
-    PatientDataManager.validateProfile(patient.profile);
 
     const inputs = {
         history: patient.history.pump,
@@ -521,9 +486,6 @@ app.post('/patients/:patientId/initialize', (req, res) => {
         if (!profile) {
             return res.status(400).json({ error: 'Profile is required' });
         }
-
-        // Validate profile
-        PatientDataManager.validateProfile(profile);
 
         // Create or recreate patient
         const patient = PatientDataManager.createPatient(patientId, profile, initialData, settings);
@@ -667,9 +629,6 @@ app.patch('/patients/:patientId/profile', (req, res) => {
 
         // Apply updates
         Object.assign(patient.profile, profileUpdates);
-
-        // Validate updated profile
-        PatientDataManager.validateProfile(patient.profile);
 
         patient.lastUpdated = new Date().toISOString();
 
