@@ -9,6 +9,7 @@ const getLastGlucose = require('./lib/glucose-get-last');
 const determine_basal = require('./lib/determine-basal/determine-basal');
 const generateMeal = require('./lib/meal');
 const tempBasalFunctions = require('./lib/basal-set-temp');
+const detectSensitivity = require('./lib/determine-basal/autosens');
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(__dirname, 'logs');
@@ -406,12 +407,49 @@ function calculateMealForPatient(patientId, clock) {
     return recentCarbs;
 }
 
+function calculateAutosensForPatient(patientId, currentTime) {
+    const patient = patients[patientId];
+    if (!patient) throw new Error('Patient not found');
+    
+    // Check if we have enough data
+    if (patient.history.glucose.length < 24) {
+        return {
+            ratio: 1.0,
+            newisf: patient.profile.sens
+        };
+    }
+    
+    const inputs = {
+        glucose_data: patient.history.glucose,
+        iob_inputs: {
+            profile: patient.profile,
+            history: patient.history.pump,
+            clock: currentTime
+        },
+        basalprofile: patient.profile.basalprofile || [
+            { minutes: 0, rate: patient.profile.current_basal, start: "00:00:00", i: 0 }
+        ],
+        carbs: patient.history.carbs,
+        temptargets: [], // Could be extended to support temp targets
+        retrospective: false,
+        deviations: 96
+    };
+    
+    return detectSensitivity(inputs);
+}
+
 function calculateBasalForPatient(patientId, currentTime, options = {}) {
     const patient = patients[patientId];
     if (!patient) throw new Error('Patient not found');
 
+    // Calculate autosens if not provided and enabled
+    let autosensData = options.autosens;
+    if ( options.enableAutosens !== false) {
+        autosensData = calculateAutosensForPatient(patientId, currentTime);
+    }
+
     // Calculate IOB
-    const iobData = calculateIOBForPatient(patientId, currentTime, options.autosens);
+    const iobData = calculateIOBForPatient(patientId, currentTime, autosensData);
 
     // Calculate meal data
     const mealData = calculateMealForPatient(patientId, currentTime);
