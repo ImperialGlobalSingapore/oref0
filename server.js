@@ -544,7 +544,15 @@ app.post('/patients/:patientId/calculate', (req, res) => {
         context: {
             iob: result.iob,
             meal: result.meal,
-            glucose: result.glucoseStatus
+            glucose: result.glucoseStatus,
+            autosens: result.autosens ? {
+                ratio: result.autosens.ratio,
+                newISF: result.autosens.newisf,
+                originalISF: result.autosens.originalISF
+            } : null
+        },
+        diagnostics: {
+            stderrLog: result.stderrLog  // Include stderr output in response
         }
     });
 
