@@ -501,55 +501,7 @@ app.post('/patients/:patientId/initialize', (req, res) => {
     }
 });
 
-// 2. Calculate Basal with Autosens
-// TODO: untested
-app.post('/patients/:patientId/autosens', (req, res) => {
-    try {
-        const { patientId } = req.params;
-        const { currentTime, newData = {}, options = {} } = req.body;
-
-        if (!PatientDataManager.patientExists(patientId)) {
-            return res.status(404).json({ error: 'Patient not found' });
-        }
-
-        if (!currentTime) {
-            return res.status(400).json({ error: 'currentTime is required' });
-        }
-
-        // Add new data to patient history
-        if (Object.keys(newData).length > 0) {
-            PatientDataManager.addNewData(patientId, newData);
-        }
-
-        // Force autosens to be enabled for this endpoint
-        const newOptions = { ...options, enableAutosens: true };
-
-        // Calculate basal recommendation using the main function
-        const result = calculateBasalForPatient(patientId, currentTime, newOptions);
-
-        // The `calculateBasalForPatient` function and the underlying libraries
-        // will print diagnostic information to the console.
-        res.json({
-            patientId: patientId,
-            timestamp: currentTime,
-            suggestion: result.suggestion,
-            context: {
-                iob: result.iob,
-                meal: result.meal,
-                glucose: result.glucoseStatus,
-                autosens: result.autosens
-            },
-            diagnostics: {
-                stderrLog: result.stderrLog
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// 3. Calculate Basal
+// 2. Calculate Basal
 app.post('/patients/:patientId/calculate', (req, res) => {
     //   try {
     const { patientId, glucose } = req.params;
@@ -609,7 +561,7 @@ app.post('/patients/:patientId/calculate', (req, res) => {
     //   }
 });
 
-// 4. Get Patient Status
+// 3. Get Patient Status
 app.get('/patients/:patientId/status', (req, res) => {
     try {
         const { patientId } = req.params;
@@ -626,7 +578,7 @@ app.get('/patients/:patientId/status', (req, res) => {
     }
 });
 
-// 5. Get Patient History
+// 4. Get Patient History
 app.get('/patients/:patientId/history', (req, res) => {
     try {
         const { patientId } = req.params;
@@ -671,7 +623,7 @@ app.get('/patients/:patientId/history', (req, res) => {
     }
 });
 
-// 6. Update Profile
+// 5. Update Profile
 app.patch('/patients/:patientId/profile', (req, res) => {
     try {
         const { patientId } = req.params;
@@ -700,7 +652,7 @@ app.patch('/patients/:patientId/profile', (req, res) => {
     }
 });
 
-// 7. List Patients
+// 6. List Patients
 app.get('/patients', (req, res) => {
     try {
         const patientList = Object.keys(patients).map(patientId => ({
@@ -718,7 +670,7 @@ app.get('/patients', (req, res) => {
     }
 });
 
-// 8. Delete Patient
+// 7. Delete Patient
 app.delete('/patients/:patientId', (req, res) => {
     try {
         const { patientId } = req.params;
@@ -826,7 +778,7 @@ const testCases = {
     }
 };
 
-// 9. Create Test Patient
+// 8. Create Test Patient
 app.post('/test/patients/:testCase', (req, res) => {
     try {
         const { testCase } = req.params;
@@ -854,7 +806,7 @@ app.post('/test/patients/:testCase', (req, res) => {
     }
 });
 
-// 10. Run Test Scenario
+// 9. Run Test Scenario
 app.post('/test/scenario/:patientId', (req, res) => {
     try {
         const { patientId } = req.params;
@@ -946,7 +898,7 @@ app.post('/test/scenario/:patientId', (req, res) => {
     }
 });
 
-// 11. List Test Cases
+// 10. List Test Cases
 app.get('/test/cases', (req, res) => {
     res.json({
         availableTestCases: Object.keys(testCases),
@@ -980,7 +932,6 @@ app.listen(PORT, () => {
     console.log(`Multi-Patient OpenAPS server running on port ${PORT}`);
     console.log(`\nAvailable endpoints:`);
     console.log(`  POST /patients/{id}/initialize     - Create patient profile`);
-    console.log(`  POST /patients/{id}/autosens       - Calculate insulin sensitivity`);
     console.log(`  POST /patients/{id}/calculate      - Calculate basal recommendation`);
     console.log(`  GET  /patients/{id}/status         - Get patient status`);
     console.log(`  GET  /patients/{id}/history        - Get patient history`);
