@@ -7,9 +7,8 @@ const path = require('path');
 const generateIOB = require('./lib/iob');
 const getLastGlucose = require('./lib/glucose-get-last');
 const determine_basal = require('./lib/determine-basal/determine-basal');
-const generateMeal = require('./lib/meal');
+const getMealData = require('./lib/meal/total');
 const tempBasalFunctions = require('./lib/basal-set-temp');
-const detectSensitivity = require('./lib/determine-basal/autosens');
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(__dirname, 'logs');
@@ -137,8 +136,10 @@ class PatientDataManager {
                 tempBasal: initialData.currentTempBasal || null,
                 lastCalculation: null,
                 cachedIOB: null,
-                cachedMeal: null
+                cachedMeal: null,
             },
+            IIR: initialData.currentTempBasal?.rate || profile.current_basal || 0,  // Insulin Infusion Rate
+            current_basal: profile.current_basal,  // Store original current_basal separately to prevent overwrites
             settings: { ...defaultSettings, ...settings },
             createdAt: new Date().toISOString(),
             lastUpdated: new Date().toISOString()
@@ -189,14 +190,37 @@ class PatientDataManager {
             patient.history.glucose.push(...renamedReadings);
         }
 
-        // Add new pump events
-        if (newData.pumpEvents && Array.isArray(newData.pumpEvents)) {
-            patient.history.pump.push(...newData.pumpEvents);
+        // Add insulin bolus events to pump history (matching Oref0.ts lines 180-189)
+        if (newData.bolus && newData.bolus > 0) {
+            const timestamp = newData.timestamp || new Date().toISOString();
+            patient.history.pump.push({
+                _type: "Bolus",
+                timestamp: timestamp,
+                amount: newData.bolus,
+                insulin: newData.bolus,
+                date: new Date(timestamp),
+                dateString: timestamp,
+                started_at: new Date(timestamp),
+                duration: 0
+            });
         }
 
-        // Add new carb entries
+        // Add carb events to pump history (matching Oref0.ts lines 197-204)
         if (newData.carbEntries && Array.isArray(newData.carbEntries)) {
-            patient.history.carbs.push(...newData.carbEntries);
+            newData.carbEntries.forEach(carb => {
+                patient.history.pump.push({
+                    _type: "carbs",
+                    timestamp: carb.timestamp,
+                    carbs: carb.carbs,
+                    nsCarbs: carb.carbs,
+                    enteredBy: carb.enteredBy || "patient"
+                });
+            });
+        }
+
+        // Add pump events (temp basals, etc.)
+        if (newData.pumpEvents && Array.isArray(newData.pumpEvents)) {
+            patient.history.pump.push(...newData.pumpEvents);
         }
 
         // Re-sort arrays
@@ -313,6 +337,7 @@ class PatientDataManager {
                 trend: trend
             } : null,
             currentTempBasal: patient.currentState.tempBasal,
+            currentIIR: patient.IIR,  // Include current Insulin Infusion Rate
             historyCount: {
                 glucose: patient.history.glucose.length,
                 pump: patient.history.pump.length,
@@ -332,94 +357,83 @@ class PatientDataManager {
     }
 }
 
-// OpenAPS calculation functions (same as before but using patient data)
-function calculateIOBForPatient(patientId, clock, autosensData = null) {
+// OpenAPS calculation functions - matching Oref0.ts implementation
+function calculateIOBForPatient(patientId, clock) {
     const patient = patients[patientId];
     if (!patient) throw new Error('Patient not found');
 
+    // Match Oref0.ts: pass minimal inputs object with just profile and clock
     const inputs = {
-        history: patient.history.pump,
-        history24: null, // Could implement 24h history if needed
         profile: patient.profile,
         clock: clock
     };
 
-    if (autosensData) {
-        inputs.autosens = autosensData;
-    }
-
-    return generateIOB(inputs);
+    // Pass false as second parameter (currentIOBOnly) and treatments as third parameter
+    // This matches the Oref0.ts implementation exactly
+    return generateIOB(inputs, false, patient.history.pump);
 }
 
 function calculateMealForPatient(patientId, clock) {
     const patient = patients[patientId];
     if (!patient) throw new Error('Patient not found');
 
-
-    const inputs = {
-        history: patient.history.pump,
+    // Match Oref0.ts meal data structure (lines 262-273)
+    const opts = {
+        treatments: patient.history.pump,  // All pump events including carbs
         profile: patient.profile,
-        basalprofile: patient.profile.basalprofile || [
-            { minutes: 0, rate: patient.profile.current_basal, start: "00:00:00", i: 0 }
-        ],
-        clock: clock,
-        carbs: patient.history.carbs,
-        glucose: patient.history.glucose
+        pumphistory: patient.history.pump,  // Same as treatments for compatibility
+        glucose: patient.history.glucose,
+        basalprofile: {
+            basals: [
+                { minutes: 0, rate: 1 }  // Default from Oref0.ts line 269
+            ]
+        }
     };
 
-    const recentCarbs = generateMeal(inputs);
+    // Call getMealData with opts and clock (matching Oref0.ts line 274)
+    const meal_data = getMealData(opts, clock);
 
+    // Check for sufficient glucose data
     if (patient.history.glucose.length < 36) {
-        recentCarbs.mealCOB = 0;
-        recentCarbs.reason = "not enough glucose data to calculate carb absorption";
+        meal_data.mealCOB = 0;
+        meal_data.reason = "not enough glucose data to calculate carb absorption";
     }
 
-    return recentCarbs;
-}
-
-function calculateAutosensForPatient(patientId, currentTime) {
-    const patient = patients[patientId];
-    if (!patient) throw new Error('Patient not found');
-    
-    // Check if we have enough data
-    if (patient.history.glucose.length < 24) {
-        return {
-            ratio: 1.0,
-            newisf: patient.profile.sens
-        };
-    }
-    
-    const inputs = {
-        glucose_data: patient.history.glucose,
-        iob_inputs: {
-            profile: patient.profile,
-            history: patient.history.pump,
-            clock: currentTime
-        },
-        basalprofile: patient.profile.basalprofile || [
-            { minutes: 0, rate: patient.profile.current_basal, start: "00:00:00", i: 0 }
-        ],
-        carbs: patient.history.carbs,
-        temptargets: [], // Could be extended to support temp targets
-        retrospective: false,
-        deviations: 96
-    };
-    
-    return detectSensitivity(inputs);
+    return meal_data;
 }
 
 function calculateBasalForPatient(patientId, currentTime, options = {}) {
     const patient = patients[patientId];
     if (!patient) throw new Error('Patient not found');
 
-    // Calculate autosens if not provided and enabled
-    let autosensData = options.autosens;
-    if ( options.enableAutosens !== false) {
-        autosensData = calculateAutosensForPatient(patientId, currentTime);
+    // Add temp basal effect to treatment history (matching Oref0.ts lines 227-234)
+    // This runs every 5 minutes in Oref0.ts, so we should only add if 5 min have passed
+    const currentTimeMs = currentTime.getTime();
+    const lastCalcTime = patient.currentState.lastCalculation?.timestamp;
+    const shouldAddTempBasal = !lastCalcTime || 
+        (currentTimeMs - new Date(lastCalcTime).getTime() >= 5 * 60 * 1000);
+    
+    if (shouldAddTempBasal && patient.IIR !== undefined) {
+        // Use IIR (Insulin Infusion Rate) for calculation, matching Oref0.ts
+        const basalDiff = patient.IIR - patient.current_basal;
+        
+        // Add temp basal event for the past 5 minutes
+        patient.history.pump.push({
+            _type: "Temp Basal",
+            eventType: "Temp Basal",
+            rate: basalDiff,  // IIR - current_basal (difference from baseline)
+            date: currentTimeMs - 5 * 60 * 1000,  // 5 minutes ago
+            timestamp: new Date(currentTimeMs - 5 * 60 * 1000),
+            insulin: 5 / 60 * basalDiff,  // 5 minutes worth of insulin
+            duration: 5
+        });
     }
 
+    // Calculate autosens if not provided and enabled
+    const autosens = {ratio:1.0};
+
     // Calculate IOB
-    const iobData = calculateIOBForPatient(patientId, currentTime, autosensData);
+    const iobData = calculateIOBForPatient(patientId, currentTime);
 
     // Calculate meal data
     const mealData = calculateMealForPatient(patientId, currentTime);
@@ -431,11 +445,19 @@ function calculateBasalForPatient(patientId, currentTime, options = {}) {
         throw new Error('No glucose data available for calculation');
     }
 
-    // Apply profile overrides if provided
-    const effectiveProfile = { ...patient.profile, ...options.overrideProfile };
+    // Save original current_basal (it gets overwritten by determine_basal or other functions)
+    patient.profile.current_basal = patient.current_basal;
 
-    // Get current temp basal
-    const currentTemp = patient.currentState.tempBasal || { rate: effectiveProfile.current_basal, duration: 0 };
+    // Check if current temp basal is still active (matching Oref0.ts)
+    let currentTemp = patient.currentState.tempBasal || {};
+    if (currentTemp.deliverAt && currentTemp.duration) {
+        const tempEnd = new Date(currentTemp.deliverAt).getTime() + (currentTemp.duration * 60 * 1000);
+        
+        if (tempEnd < currentTime.getTime()) {
+            // Temp basal has expired, return to default
+            currentTemp = {};
+        }
+    }
 
     // Calculate basal recommendation with stderr capture
     const captureResult = captureStderr(() => {
@@ -443,18 +465,32 @@ function calculateBasalForPatient(patientId, currentTime, options = {}) {
             glucoseStatus,
             currentTemp,
             iobData,
-            effectiveProfile,
-            options.autosens,
+            patient.profile,
+            autosens,
             mealData,
             tempBasalFunctions,
-            options.microbolus || false,
+            false,
             null, // reservoir_data
-            new Date(currentTime).getTime()
+            currentTime
         );
     });
 
     const suggestion = captureResult.result;
     const stderrOutput = captureResult.stderr;
+
+    // Prepare outputs (matching Oref0.ts)
+    if (suggestion && typeof suggestion.rate !== 'undefined' && !isNaN(suggestion.rate)) {
+        // Remember new temp
+        patient.currentState.tempBasal = {
+            duration: suggestion.duration,
+            deliverAt: suggestion.deliverAt,
+            rate: suggestion.rate,
+            temp: "absolute"
+        };
+        
+        // Update IIR (Insulin Infusion Rate)
+        patient.IIR = suggestion.rate;
+    }
 
     // Cache results
     patient.currentState.cachedIOB = iobData;
@@ -467,10 +503,11 @@ function calculateBasalForPatient(patientId, currentTime, options = {}) {
 
     return {
         suggestion: suggestion,
+        IIR: patient.IIR,
         iob: iobData[0], // Return first IOB entry for immediate use
         meal: mealData,
         glucoseStatus: glucoseStatus,
-        autosens: autosensData, // Include autosens data
+        autosens: autosens, // Include autosens data
         stderrLog: stderrOutput  // Include in return value
     };
 }
@@ -521,7 +558,7 @@ app.post('/patients/:patientId/calculate', (req, res) => {
     // console.log(newData)
     // console.log(patients[patientId].history.glucose)
     // Calculate basal recommendation
-    const result = calculateBasalForPatient(patientId, currentTime, options);
+    const result = calculateBasalForPatient(patientId, new Date(currentTime), options);
 
     // Save calculation to log file
     if (options.enableLogging !== false) {  // Default to true
@@ -541,6 +578,7 @@ app.post('/patients/:patientId/calculate', (req, res) => {
         patientId: patientId,
         timestamp: currentTime,
         suggestion: result.suggestion,
+        IIR: result.IIR,
         context: {
             iob: result.iob,
             meal: result.meal,
