@@ -10,20 +10,11 @@ const determine_basal = require('./lib/determine-basal/determine-basal');
 const getMealData = require('./lib/meal/total');
 const tempBasalFunctions = require('./lib/basal-set-temp');
 
-// Create logs directory if it doesn't exist
-const logsDir = path.join(__dirname, 'logs');
-if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
-}
-
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
 // In-memory patient data store
 const patients = {};
-
-// Track log files that have been initialized in this session
-const logFileMap = new Map();
 
 // Utility function to capture stderr output
 function captureStderr(callback) {
@@ -49,66 +40,6 @@ function captureStderr(callback) {
         process.stderr.write = originalWrite;
         throw error;
     }
-}
-
-// Function to save calculation logs to file
-function saveCalculationLog(patientId, data = {}) {
-    const timestamp = new Date().toISOString();
-    let logFileName;
-    let logFilePath;
-    
-    // Check if we've already determined the log file for this patient in this session
-    if (logFileMap.has(patientId)) {
-        // Use the already determined log file
-        logFileName = logFileMap.get(patientId);
-        logFilePath = path.join(logsDir, logFileName);
-    } else {
-        // First time logging for this patient in this session
-        logFileName = `${patientId}_calculations.log`;
-        logFilePath = path.join(logsDir, logFileName);
-        
-        // Check if file exists and add timestamp to filename if it does
-        if (fs.existsSync(logFilePath)) {
-            // Create timestamp for filename (replace colons with hyphens for Windows compatibility)
-            const fileTimestamp = timestamp.replace(/:/g, '-').replace(/\./g, '-');
-            logFileName = `${patientId}_calculations_${fileTimestamp}.log`;
-            logFilePath = path.join(logsDir, logFileName);
-        }
-        
-        // Store the determined filename for future use
-        logFileMap.set(patientId, logFileName);
-    }
-    
-    const logEntry = {
-        timestamp: timestamp,
-        patientId: patientId,
-        request: {
-            currentTime: data.currentTime,
-            newData: data.newData,
-            options: data.options
-        },
-        response: {
-            suggestion: data.suggestion,
-            iob: data.iob,
-            meal: data.meal,
-            glucose: data.glucose
-        },
-        diagnostics: {
-            stderr: data.stderrLog
-        }
-    };
-    
-    // Format log entry with separator
-    const logContent = '='.repeat(80) + '\n' +
-                      `[${timestamp}] Patient: ${patientId}\n` +
-                      '-'.repeat(80) + '\n' +
-                      JSON.stringify(logEntry, null, 2) + '\n' +
-                      '='.repeat(80) + '\n\n';
-    
-    // Append to the log file (creates file if it doesn't exist)
-    fs.appendFileSync(logFilePath, logContent);
-    
-    return logFileName;
 }
 
 // Utility functions for data management
@@ -559,20 +490,6 @@ app.post('/patients/:patientId/calculate', (req, res) => {
     // console.log(patients[patientId].history.glucose)
     // Calculate basal recommendation
     const result = calculateBasalForPatient(patientId, new Date(currentTime), options);
-
-    // Save calculation to log file
-    if (options.enableLogging !== false) {  // Default to true
-        saveCalculationLog(patientId, {
-            currentTime: currentTime,
-            newData: newData,
-            options: options,
-            suggestion: result.suggestion,
-            iob: result.iob,
-            meal: result.meal,
-            glucose: result.glucoseStatus,
-            stderrLog: result.stderrLog
-        });
-    }
 
     res.json({
         patientId: patientId,
