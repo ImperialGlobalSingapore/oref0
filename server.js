@@ -51,9 +51,9 @@ class PatientDataManager {
     static createPatient(patientId, profile, initialData = {}, settings = {}) {
         const defaultSettings = {
             timezone: 'UTC',
-            historyRetentionPeriod: 'weeks', // 'hours', 'days', 'weeks', 'months'
-            historyRetentionValue: 1,       // default to 1 week
-            autoCleanup: true
+            historyRetentionPeriod: 'months', // 'hours', 'days', 'weeks', 'months'
+            historyRetentionValue: 6,       // default to 1 week
+            autoCleanup: false
         };
 
         patients[patientId] = {
