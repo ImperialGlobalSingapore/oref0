@@ -356,7 +356,6 @@ function calculateBasalForPatient(patientId, currentTime, options = {}) {
             date: currentTimeMs - 5 * 60 * 1000,  // 5 minutes ago
             timestamp: new Date(currentTimeMs - 5 * 60 * 1000),
             insulin: 5 / 60 * basalDiff,  // 5 minutes worth of insulin
-            duration: 5
         });
     }
 
